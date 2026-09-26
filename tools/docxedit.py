@@ -19,8 +19,12 @@ def _run(rpr, text):
 def set_text(p, text):
     """Replace a paragraph's text, keeping paragraph props and the first non-empty run's formatting."""
     runs = p.findall(q('r'))
-    tmpl = next((r for r in runs if ''.join(t.text or '' for t in r.iter(q('t'))).strip()), runs[0])
-    rpr = tmpl.find(q('rPr'))
+    if runs:
+        tmpl = next((r for r in runs if ''.join(t.text or '' for t in r.iter(q('t'))).strip()), runs[0])
+        rpr = tmpl.find(q('rPr'))
+    else:                                   # empty paragraph: take the run props stored on the paragraph mark
+        ppr = p.find(q('pPr'))
+        rpr = ppr.find(q('rPr')) if ppr is not None else None
     for r in runs:
         p.remove(r)
     p.append(_run(rpr, text))
