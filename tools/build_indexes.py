@@ -52,6 +52,7 @@ INTRO_HEADS = {'سؤال قبل الأسئلة', 'التشخيص: ثلاث مف�
 CONCL_HEADS = {'السؤال الذي بدأنا به', 'الرحلة في أربعة أبواب', 'ما أنجزه الكتاب وما لم ينجزه', 'ما لم يثبته الكتاب',
                'ما كان يمكن أن أفعله بطريقة أخرى', 'ما بعد هذا الكتاب', 'كيف يُقرأ الكتاب بحسب القارئ', 'كلمة أخيرة'}
 concl_toc = []
+REFSECS = set()
 for ch, path in FILES:
     sec = None
     texts = list(units(path))
@@ -69,7 +70,10 @@ for ch, path in FILES:
         m = re.match(r'^(\d+\.\d+)\s', s)
         if m and len(s) < 130 and isp:
             sec = m.group(1)
-            TOC.append((1, s))
+            if 'قائمة المراجع' in s:          # chapter reference lists are merged into the book's list
+                REFSECS.add(sec)
+            else:
+                TOC.append((1, s))
         if isp and ch == 'intro' and s in INTRO_HEADS:
             TOC.append((1, s))
         if isp and ch == 'concl' and s in CONCL_HEADS:
@@ -80,7 +84,9 @@ TOC += concl_toc
 TOC.append((0, 'الملاحق'))
 TOC += [(1, t) for t in APPENDIX_TITLES]
 TOC.append((0, 'الفهارس'))
-TOC += [(1, t) for t in ('فهرس الآيات القرآنية', 'فهرس الأحاديث والآثار', 'قائمة المراجع الموحدة')]
+TOC += [(1, t) for t in ('فهرس الآيات القرآنية', 'فهرس الأحاديث والآثار')]
+TOC.append((0, 'قائمة المراجع'))
+json.dump(TOC, open('toc.json', 'w', encoding='utf-8'), ensure_ascii=False)
 
 ORD = {'1': 'الأول', '2': 'الثاني', '3': 'الثالث', '4': 'الرابع', '5': 'الخامس', '6': 'السادس', '7': 'السابع', '8': 'الثامن',
        '9': 'التاسع', '10': 'العاشر', '11': 'الحادي عشر', '12': 'الثاني عشر', '13': 'الثالث عشر', '14': 'الرابع عشر'}
@@ -121,6 +127,8 @@ QUOTE = re.compile(r'﴿([^﴾]+)﴾')
 V = {}
 prev_quote = None
 for ch, sec, s in U:
+    if sec in REFSECS or re.match(r'^\d+\.\s', s):
+        continue
     quotes = [(m.start(), m.end(), m.group(1)) for m in QUOTE.finditer(s)]
     for m in VREF.finditer(s):
         key = (SURAHS.index(m.group(1)), int(m.group(2)), int(m.group(3)) if m.group(3) else None)
@@ -200,7 +208,7 @@ def hadith_rows(items):
     rows = []
     for text, src, pat in items:
         rx = re.compile(pat)
-        locs = [where(ch, sec) for ch, sec, s in U if rx.search(s) and not re.match(r'^\d+\.\s', s)]
+        locs = [where(ch, sec) for ch, sec, s in U if rx.search(s) and not re.match(r'^\d+\.\s', s) and sec not in REFSECS]
         if locs:
             rows.append((text, src, join_locs(locs)))
         else:
@@ -357,25 +365,18 @@ def table(tmpl, data):
 
 
 OUTP = [para(11, 'الفهارس')]
-OUTP += heading('فهرس المحتويات')
-for level, text in TOC:
-    OUTP.append(para(102, text) if level == 0 else para(20, text))
-    if level == 0:
-        pass
-OUTP += [fresh(copy.deepcopy(K[10]))]
 OUTP += heading('فهرس الآيات القرآنية')
 OUTP.append(para(20, 'الآيات مرتبة بترتيب المصحف، ومع كل آية طرفها كما ورد في الكتاب، ومواضعها برقم القسم (مثل 8.2 أي الفصل الثامن، القسم الثاني). '
                      'و«إحالة دون نص» تعني أن الكتاب أحال إلى الآية دون أن ينقل لفظها.'))
 OUTP += [table(498, VERSES), blank()]
 OUTP += [fresh(copy.deepcopy(K[10]))]
 OUTP += heading('فهرس الأحاديث والآثار')
-OUTP.append(para(20, 'الأحاديث مرتبة بحسب أول ورودها في الكتاب، والتخريج هو ما ذكره الكتاب في موضعه. والمطابقة بالطبعات المعتمدة مسجلة في قائمة '
-                     'المواضع التي تحتاج مطابقة.'))
+OUTP.append(para(20, 'الأحاديث مرتبة بحسب أول ورودها في الكتاب، والتخريج هو ما ذكره الكتاب في موضعه.'))
 OUTP += [table(498, H_ROWS), blank(), para(28, 'الآثار'), table(498, A_ROWS), blank()]
 OUTP += [fresh(copy.deepcopy(K[10]))]
-OUTP += heading('قائمة المراجع الموحدة')
-OUTP.append(para(20, 'هذه القائمة تجمع ما ورد في قوائم مراجع الفصول الأربعة عشر، بعد حذف المكرر وتوحيد بيانات النشر. وتبقى قائمة كل فصل في آخره '
-                     'لمن يريد مراجع موضع بعينه.'))
+OUTP += [para(11, 'قائمة المراجع')]
+OUTP.append(para(20, 'تجمع هذه القائمة مراجع الفصول الأربعة عشر في موضع واحد، بعد حذف المكرر وتوحيد بيانات النشر، مرتبةً بحسب نوع المصدر. '
+                     'وتُذكر المراجع في متن الفصول باسم المؤلف وسنة النشر.'))
 n = 0
 for title, items in list(REF_AR.items()) + [('المصادر الدينية المقارنة', W_REL), ('المراجع الأجنبية', W_OTH)]:
     OUTP.append(blank())
