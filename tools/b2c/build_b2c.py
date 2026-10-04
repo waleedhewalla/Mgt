@@ -1,4 +1,4 @@
-"""Condensed edition of Book One.
+"""Condensed edition of Book Two.
 
 Applies the condensation edits (edits/*.json) to the print edition, then:
 renumbers sections and appendices, updates cross-references, rebuilds the TOC (TC entries + static result),
@@ -9,7 +9,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 from docxedit import *
 
-SRC = os.path.join(HERE, 'b1.docx')
+SRC = os.path.join(HERE, 'b2.docx')
 OUT = os.path.join(HERE, 'build')
 shutil.rmtree(OUT, ignore_errors=True)
 with zipfile.ZipFile(SRC) as z:
@@ -94,9 +94,9 @@ def last_p(pred):
     return [e for i, e in sorted(A.items()) if e.tag == q('p') and pred(text(e))][-1]
 
 
-TEMPL = {'body': last_p(lambda t: t.startswith('فالركن الثالث يجيب')),
-         'heading': last_p(lambda t: t.startswith('8.4  الركن الثالث')),
-         'subheading': last_p(lambda t: t.startswith('مقارنة تشغيلية: الابتلاء'))}
+TEMPL = {'body': last_p(lambda t: t.startswith('تغيير التسميات دون تغيير الأنظمة')),
+         'heading': last_p(lambda t: t.startswith('1.1  التشخيص الأول')),
+         'subheading': last_p(lambda t: t.startswith('السبب الرابع: التناقض الداخلي'))}
 TEMPL = {k: copy.deepcopy(v) for k, v in TEMPL.items()}
 for v in TEMPL.values():
     strip_fields(v)
@@ -135,6 +135,14 @@ def walk(ea, eb):
         cur = cur.getnext()
     return out + [eb] if cur is eb else None
 
+
+# paragraphs carrying TOC entries (levels 1–2) keep them even when an edit rewrites their text
+ORIG_TC = []
+for i, e in sorted(A.items()):
+    for it in e.iter(q('instrText')):
+        m = re.search(r'TC "([^"]+)" \\l ([12])', it.text or '')
+        if m:
+            ORIG_TC.append((e, int(m.group(2))))
 
 # ------------------------------------------------------------------ 1. edits
 EDITS = {}
@@ -286,7 +294,7 @@ ORD = ['الأول', 'الثاني', 'الثالث', 'الرابع', 'الخام
        'الثالث عشر', 'الرابع عشر']
 ORD_RX = '|'.join(sorted(ORD, key=len, reverse=True))
 CH_HEAD = re.compile(r'^الفصل (' + ORD_RX + r')$')
-SEC_HEAD = re.compile(r'^(\d{1,2})\.(\d{1,2})(\s+)(.*)$')
+SEC_HEAD = re.compile(r'^(\d{1,2})\.(\d{1,2})(?:-[٠-٩\dء-ي]+)?(\s+)(.*)$')
 APP_HEAD = re.compile(r'^الملحق (' + ORD_RX + r'): (.*)$')
 
 
@@ -301,7 +309,7 @@ i0 = next(i for i, e in enumerate(kids) if any('TOC' in (t.text or '') for t in 
 i1 = next(i for i in range(i0, len(kids)) if any(f.get(q('fldCharType')) == 'end' for f in kids[i].iter(q('fldChar'))))
 OLD_TOC = kids[i0:i1 + 1]
 TOC_L0 = copy.deepcopy(OLD_TOC[0])
-TOC_L1 = copy.deepcopy(OLD_TOC[1])
+TOC_L1 = copy.deepcopy(next(e for e in OLD_TOC if text(e).startswith('الفصل ')))
 for t_ in (TOC_L0, TOC_L1):
     strip_fields(t_)
 OLD_TOC_TEXTS = {text(e) for e in OLD_TOC}
@@ -324,8 +332,8 @@ for p in top_paras():
     if chapter and m and int(m.group(1)) == chapter and len(t) < 160:
         count[chapter] += 1
         new_k = count[chapter]
-        SECMAP[(chapter, int(m.group(2)))] = new_k
-        if new_k != int(m.group(2)):
+        SECMAP.setdefault((chapter, int(m.group(2))), new_k)
+        if new_k != int(m.group(2)) or re.match(r'^\d+\.\d+-', t):
             smart_set(p, f'{chapter}.{new_k}  {m.group(4).strip()}')
 # deleted sections map to the nearest earlier surviving section of the same chapter
 ORIG_SECS = collections.defaultdict(list)
@@ -353,6 +361,9 @@ def remap_refs(s):
     return REF.sub(f, s)
 
 
+for t in body.iter(q('t')):
+    if t.text and '§' in t.text:
+        t.text = re.sub(r'§\s*(?=\d)', '', t.text)
 ref_changes = 0
 for t in body.iter(q('t')):
     if t.text and REF.search(t.text):
@@ -361,8 +372,18 @@ for t in body.iter(q('t')):
         if SEC_HEAD.match(pt) and t is next(par.iter(q('t'))):
             continue             # headings already renumbered
         if re.fullmatch(r'\(?\d{1,2}\.\d{1,2}\)?', pt):
-            continue             # an item number standing alone, not a section reference
-        new = remap_refs(t.text)
+            continue             # an item number standing alone (survey/table numbering), not a section reference
+        if len(REF.findall(pt)) >= 5:
+            src = t.text
+            def f2(m, src=src):
+                pre = src[:m.start()]
+                if pre.count('(') > pre.count(')'):
+                    return m.group(0)        # numbered items inside parentheses: survey numbering
+                ch, k = int(m.group(1)), int(m.group(2))
+                return f'{ch}.{SECMAP[(ch, k)]}' if (ch, k) in SECMAP else m.group(0)
+            new = REF.sub(f2, src)
+        else:
+            new = remap_refs(t.text)
         if new != t.text:
             ref_changes += 1
             t.text = new
@@ -406,40 +427,30 @@ for p in body.iter(q('p')):
                 cap_changes += 1
                 x.text = new
 
-# ------------------------------------------------------------------ 4. appendices renumbered; moved ones point to the companion
-APPMAP, moved_apps = {}, []
-for part, label, els in COMP_COPIES:
-    for e in els:
-        m = APP_HEAD.match(text(e)) if e.tag == q('p') else None
-        if m:
-            moved_apps.append(m.group(1))
-n = 0
+
+# ------------------------------------------------------------------ 3c. figure captions «شكل N:» renumbered across the book
+fig_n = 0
 for p in top_paras():
-    m = APP_HEAD.match(text(p))
+    t = text(p)
+    m = re.match(r'^شكل (\d+):', t)
     if m:
-        APPMAP[m.group(1)] = ORD[n]
-        if ORD[n] != m.group(1):
-            smart_set(p, f'الملحق {ORD[n]}: {m.group(2)}')
-        n += 1
-# original appendix names that were deleted entirely (not moved) are not referenced afterwards
-APP_REF = re.compile(r'(الملحق|ملحق) (' + ORD_RX + r')(?![\w])')
-app_ref_changes = 0
+        fig_n += 1
+        if int(m.group(1)) != fig_n:
+            for x in p.iter(q('t')):
+                if x.text and f'شكل {m.group(1)}:' in x.text:
+                    x.text = x.text.replace(f'شكل {m.group(1)}:', f'شكل {fig_n}:', 1)
+                    break
+
+# ------------------------------------------------------------------ 4. appendix (أ) moved to the companion: references follow
+APPA_REF = re.compile(r'(?:في )?(?:ال)?ملحق \(أ\)')
+appa_changes = 0
 for p in body.iter(q('p')):
-    if APP_HEAD.match(text(p)):
+    if text(p) == 'ملحق (أ)':
         continue
     for t in p.iter(q('t')):
-        if t.text and APP_REF.search(t.text):
-            def f(m):
-                name = m.group(2)
-                if name in moved_apps:
-                    return 'الدليل العملي المرافق'
-                if name in APPMAP:
-                    return f'{m.group(1)} {APPMAP[name]}'
-                return m.group(0)
-            new = APP_REF.sub(f, t.text)
-            if new != t.text:
-                app_ref_changes += 1
-                t.text = new
+        if t.text and APPA_REF.search(t.text):
+            t.text = APPA_REF.sub(lambda m: ('في ' if m.group(0).startswith('في ') else '') + 'الدليل العملي المرافق', t.text)
+            appa_changes += 1
 
 # ------------------------------------------------------------------ 5. layout compaction
 removed_empty = 0
@@ -450,86 +461,60 @@ for e in list(body):
         continue
     pr, nx = e.getprevious(), e.getnext()
     if pr is not None and nx is not None and pr.tag == q('tbl') and nx.tag == q('tbl'):
-        continue                 # keeps two tables apart
+        continue
     if ppr(e).find(q('pageBreakBefore')) is not None:
         continue
     body.remove(e)
     removed_empty += 1
-# tables: 12 pt text (13 before), 13 pt headers (14 before), tighter cell paragraphs
 for tbl in body.iter(q('tbl')):
-    for r in tbl.iter(q('r')):
-        rp = r.find(q('rPr'))
-        if rp is None:
-            continue
-        for tag in ('sz', 'szCs'):
-            v = rp.find(q(tag))
-            if v is not None and v.get(q('val')) in ('26', '28'):
-                v.set(q('val'), str(int(v.get(q('val'))) - 2))
     for p in tbl.iter(q('p')):
         sp = p.find(q('pPr') + '/' + q('spacing'))
         if sp is not None:
             for a in ('before', 'after'):
                 if sp.get(q(a)) and int(sp.get(q(a))) > 30:
                     sp.set(q(a), '20')
-    for mar in tbl.iter(q('tcMar')):
-        for side in ('top', 'bottom'):
-            el = mar.find(q(side))
-            if el is not None and int(el.get(q('w'), '0')) > 40:
-                el.set(q('w'), '40')
 
 # ------------------------------------------------------------------ 6. index locations recomputed
-SURAH_RX = None
 from importlib.machinery import SourceFileLoader
-SURAHS = SourceFileLoader('surahs', os.path.join(os.path.dirname(HERE), 'surahs.py')).load_module().SURAHS
 AR_DIG = str.maketrans('٠١٢٣٤٥٦٧٨٩', '0123456789')
 DIAC = re.compile(r'[ً-ْٰـ]')
-
-# location units: (label, text)
-UNITS, label = [], 'المقدمة'
-chapter = None
-idx_head = next(e for e in body if e.tag == q('p') and text(e) == 'الفهارس')
-started = False
+idx_head = [e for e in body if e.tag == q('p') and text(e) == 'الفهارس'][-1]
+UNITS, label, chapter, started = [], 'المقدمة', None, False
 for e in body:
     if e is idx_head:
         break
     if e.tag == q('p'):
         t = text(e)
-        if t == 'المقدمة':
+        if t == 'الإهداء':
             started = True
         if not started:
             continue
         m = CH_HEAD.match(t)
         if m:
-            chapter = m.group(1)
-            label = f'افتتاح الفصل {chapter}'
-        elif t.startswith('خاتمة الكتاب الأول'):
-            label = 'الخاتمة'
-        elif t == 'الملاحق':
-            label = 'الملاحق'
+            chapter = ORD.index(m.group(1)) + 1
+            label = f'ف{chapter}'
+        elif t.startswith('الخاتمة: المؤسسة القرآنية'):
+            label, chapter = 'الخاتمة', None
+        elif t == 'ملحق (ب)':
+            label, chapter = 'ملحق (ب)', None
         else:
             ms = SEC_HEAD.match(t)
-            if ms and chapter and len(t) < 160:
+            if ms and chapter and int(ms.group(1)) == chapter and len(t) < 160:
                 label = f'{ms.group(1)}.{ms.group(2)}'
     if e.tag in (q('p'), q('tbl')) and started:
         UNITS.append((label, ' '.join(ptext(x) for x in ([e] if e.tag == q('p') else e.iter(q('p'))))))
-
-
-def locs_for(rx):
-    out = []
-    for lab, s in UNITS:
-        if rx.search(s.translate(AR_DIG)) and lab not in out:
-            out.append(lab)
-    return out
-
-
-def sort_key(lab):
-    m = re.match(r'^(\d+)\.(\d+)$', lab)
-    return lab
-
-
 idx_tables = [e for e in idx_head.itersiblings() if e.tag == q('tbl')][:2]
 verse_tbl, hadith_tbl = idx_tables
 dropped = []
+
+
+def set_cell(tc, s):
+    ps = tc.findall(q('p'))
+    set_text(ps[0], s)
+    for extra in ps[1:]:
+        tc.remove(extra)
+
+
 for tr in verse_tbl.findall(q('tr'))[1:]:
     tcs = tr.findall(q('tc'))
     ref = ptext(tcs[0]).translate(AR_DIG).strip()
@@ -542,15 +527,15 @@ for tr in verse_tbl.findall(q('tr'))[1:]:
         rx = re.compile(re.escape(sura) + r'\s*:\s*' + mr.group(2) + r'\s*[-–]\s*' + mr.group(3) + r'(?!\d)')
     else:
         rx = re.compile(re.escape(sura) + r'\s*:\s*(?:\d+\s*[-–،و]\s*)?' + ayah + r'(?!\d)')
-    locs = locs_for(rx)
+    locs = []
+    for lab, s in UNITS:
+        if rx.search(s.translate(AR_DIG)) and lab not in locs:
+            locs.append(lab)
     if not locs:
         verse_tbl.remove(tr)
         dropped.append(ref)
         continue
-    cell_p = tcs[2].findall(q('p'))
-    set_text(cell_p[0], '، '.join(locs))
-    for extra in cell_p[1:]:
-        tcs[2].remove(extra)
+    set_cell(tcs[2], '، '.join(locs))
 for tr in hadith_tbl.findall(q('tr'))[1:]:
     tcs = tr.findall(q('tc'))
     h = DIAC.sub('', ptext(tcs[0]))
@@ -569,25 +554,12 @@ for tr in hadith_tbl.findall(q('tr'))[1:]:
         hadith_tbl.remove(tr)
         dropped.append('hadith: ' + ' '.join(words))
         continue
-    cell_p = tcs[2].findall(q('p'))
-    set_text(cell_p[0], '، '.join(locs))
-    for extra in cell_p[1:]:
-        tcs[2].remove(extra)
+    set_cell(tcs[2], '، '.join(locs))
 
-# ------------------------------------------------------------------ 7. TC entries and the static TOC
-for p in body.iter(q('p')):
-    for r in list(p.findall(q('r'))):
-        if any((it.text or '').strip().startswith('TC ') for it in r.iter(q('instrText'))):
-            # remove the begin/instr/end triple around it
-            prv, nxt = r.getprevious(), r.getnext()
-            for x in (prv, r, nxt):
-                if x is not None and x.getparent() is p and (x.find(q('fldChar')) is not None or x is r):
-                    p.remove(x)
-TC_LIST = []
+# ------------------------------------------------------------------ 7. section TC entries refreshed; static TOC rebuilt from TC levels 1–2
 
 
 def tc_field(p, label, level):
-    TC_LIST.append((level - 1, label))
     anchor = p.findall(q('r'))[-1] if p.findall(q('r')) else None
     for kind in ('begin', None, 'end'):
         r = etree.Element(q('r'))
@@ -605,39 +577,30 @@ def tc_field(p, label, level):
             p.append(r)
 
 
-INTRO_SUB = set()
-in_intro, in_back = False, False
+def has_tc(p):
+    return any((it.text or '').strip().startswith('TC ') for it in p.iter(q('instrText')))
+
+
+chapter = None
 for p in top_paras():
     t = text(p)
-    if not t:
-        continue
-    if t == 'المقدمة':
-        in_intro = True
-        tc_field(p, 'المقدمة', 1)
-        continue
     m = CH_HEAD.match(t)
     if m:
-        in_intro = False
-        a = p.getnext()
-        b = a.getnext() if a is not None else None
-        ta, tb = (text(a) if a is not None else ''), (text(b) if b is not None else '')
-        sep_ = ' ' if ta.endswith(('؟', '?')) else '، '
-        tc_field(p, f'{t}: {ta}{sep_}{tb}' if tb and not SEC_HEAD.match(tb) else f'{t}: {ta}', 1)
-    elif t.startswith('خاتمة الكتاب الأول'):
-        in_intro = False
-        tc_field(p, 'خاتمة الكتاب الأول: من السؤال إلى المنظومة', 1)
-    elif t == 'الملاحق' and ppr(p).find(q('pageBreakBefore')) is not None or (t == 'الملاحق' and not in_back):
-        in_back = True
-        tc_field(p, 'الملاحق', 1)
-    elif t in ('الفهارس', 'قائمة المراجع'):
-        tc_field(p, t, 1)
-    elif SEC_HEAD.match(t) and len(t) < 160 and not in_intro:
-        tc_field(p, t, 2)
-    elif APP_HEAD.match(t) or t in ('فهرس الآيات القرآنية', 'فهرس الأحاديث والآثار'):
-        tc_field(p, t, 2)
-    elif t in OLD_TOC_TEXTS and len(t) < 90:
-        tc_field(p, t, 2)
-
+        chapter = ORD.index(m.group(1)) + 1
+    ms = SEC_HEAD.match(t)
+    if chapter and ms and int(ms.group(1)) == chapter and len(t) < 160:
+        if has_tc(p):
+            strip_fields(p)
+        tc_field(p, t, 3)
+for e, lvl in ORIG_TC:
+    if e.getparent() is body and not has_tc(e) and text(e):
+        tc_field(e, text(e), lvl)
+TC_LIST = []
+for p in top_paras():
+    for it in p.iter(q('instrText')):
+        m = re.search(r'TC "([^"]+)" \\l (\d)', it.text or '')
+        if m and m.group(2) in '12':
+            TC_LIST.append((int(m.group(2)) - 1, m.group(1)))
 entries = []
 for lv, t in TC_LIST:
     p = fresh(copy.deepcopy(TOC_L0 if lv == 0 else TOC_L1))
@@ -670,11 +633,9 @@ for p in entries:
     prev.addnext(p)
     prev = p
 
-# whitespace preservation
 for t in body.iter(q('t')):
     if t.text and t.text != t.text.strip():
         t.set(XML_SPACE, 'preserve')
-# unique paraIds
 seen = set()
 W14N = '{http://schemas.microsoft.com/office/word/2010/wordml}'
 for e in body.iter():
@@ -685,9 +646,8 @@ for e in body.iter():
                 del e.attrib[W14N + a]
             else:
                 seen.add((a, v))
-
 tree.write(f'{OUT}/word/document.xml', xml_declaration=True, encoding='UTF-8', standalone=True)
-out = os.path.join(HERE, 'موسوعة_الإدارة_القرآنية_الكتاب_الأول_للطباعة.docx')
+out = os.path.join(HERE, 'موسوعة_الإدارة_القرآنية_الكتاب_الثاني_للطباعة.docx')
 if os.path.exists(out):
     os.remove(out)
 subprocess.run(['zip', '-qXr', out, '.'], cwd=OUT, check=True)
@@ -701,66 +661,61 @@ ctree = etree.parse(f'{CDIR}/word/document.xml')
 cbody = ctree.getroot().find(q('body'))
 csect = copy.deepcopy(cbody.find(q('sectPr')))
 src_kids = [e for e in cbody if e.tag != q('sectPr')]
-title_tmpl = copy.deepcopy(src_kids[0])          # «موسوعة الإدارة القرآنية»
-sub_tmpl = copy.deepcopy(src_kids[6])            # «الكتاب الأول»
-author_tmpl = copy.deepcopy(src_kids[9])
-chap_tmpl = copy.deepcopy(next(e for e in src_kids if e.tag == q('p') and text(e) == 'الملاحق'))
+nonempty = [e for e in src_kids[:12] if e.tag == q('p') and text(e)]
+title_tmpl, sub_tmpl = copy.deepcopy(nonempty[0]), copy.deepcopy(nonempty[1])
+author_tmpl = copy.deepcopy(next((e for e in src_kids[:20] if 'وليد' in text(e)), nonempty[-1]))
+chap_tmpl = copy.deepcopy([e for e in src_kids if e.tag == q('p') and text(e) == 'الفهارس'][-1])
 for e in list(cbody):
     cbody.remove(e)
-for tm, s in ((title_tmpl, 'موسوعة الإدارة القرآنية'), (sub_tmpl, 'الدليل العملي المرافق للكتاب الأول'),
+for tm, s in ((title_tmpl, 'موسوعة الإدارة القرآنية'), (sub_tmpl, 'الدليل العملي المرافق للكتاب الثاني'),
               (author_tmpl, 'م. وليد عبدالله حواله')):
     p = fresh(copy.deepcopy(tm))
     strip_fields(p)
     set_text(p, s)
     cbody.append(p)
 intro = fresh(copy.deepcopy(TEMPL['body']))
-set_text(intro, 'يضم هذا الدليل المواد العملية والتعليمية التي فُصلت عن الكتاب الأول عند اختصاره: مخرجات التعلم لكل فصل، '
-                'والتمارين، وأدوات التطبيق والتدريب. وهي تُستعمل مع الكتاب ولا تغني عنه.')
+set_text(intro, 'يضم هذا الدليل المواد العملية والتعليمية التي فُصلت عن الكتاب الثاني عند اختصاره: مخرجات التعلم والتمارين لكل فصل، '
+                'ومجموعة النماذج التطبيقية السبعة والثلاثين القابلة للطباعة، برموزها التي يحيل إليها الكتاب. وهي تُستعمل مع الكتاب ولا تغني عنه.')
 cbody.append(intro)
 GROUPS = collections.OrderedDict()
-for part, label, els in sorted(COMP_COPIES, key=lambda x: (x[0] == 'apps', x[0])):
+for part, label, els in sorted(COMP_COPIES, key=lambda x: (x[0].startswith('zz'), x[0] == 'appB', x[0])):
     GROUPS.setdefault(part, []).append((label, els))
-H_PART = [('ch', 'الجزء الأول: مخرجات التعلم والتمارين لكل فصل'), ('apps', 'الجزء الثاني: أدوات التطبيق والتدريب')]
-done_parts, tool_no = set(), 0
+H_PART = {'ch': 'الجزء الأول: مخرجات التعلم والتمارين لكل فصل', 'apps': 'الجزء الثاني: مجموعة النماذج التطبيقية الشاملة'}
+done_parts = set()
 for part, items in GROUPS.items():
-    grp = 'apps' if part == 'apps' else 'ch'
+    grp = 'apps' if part.startswith('zz') else 'ch'
     if grp not in done_parts:
         done_parts.add(grp)
         hp = fresh(copy.deepcopy(chap_tmpl))
         strip_fields(hp)
-        set_text(hp, dict(H_PART)[grp])
+        set_text(hp, H_PART[grp])
         cbody.append(hp)
     for label, els in items:
-        is_app = any(e.tag == q('p') and APP_HEAD.match(text(e)) for e in els[:2])
-        if not is_app:
+        if grp == 'ch':
             h = fresh(copy.deepcopy(TEMPL['heading']))
+            strip_fields(h)
             set_text(h, label)
             cbody.append(h)
         for e in els:
             if e.tag == q('p'):
                 strip_fields(e)
-                t = text(e)
-                if t.startswith('مخرجات التعلم المتوقعة'):
+                if text(e).startswith('مخرجات التعلم المتوقعة'):
                     continue
-                m = APP_HEAD.match(t)
-                if m:
-                    tool_no += 1
-                    set_text(e, f'{tool_no}. {m.group(2)}')
             for t in e.iter(q('t')):
                 if t.text:
                     t.text = remap_refs(t.text)
             cbody.append(fresh(e))
 cbody.append(csect)
 ctree.write(f'{CDIR}/word/document.xml', xml_declaration=True, encoding='UTF-8', standalone=True)
-cout = os.path.join(HERE, 'الدليل_العملي_المرافق_للكتاب_الأول.docx')
+cout = os.path.join(HERE, 'الدليل_العملي_المرافق_للكتاب_الثاني.docx')
 if os.path.exists(cout):
     os.remove(cout)
 subprocess.run(['zip', '-qXr', cout, '.'], cwd=CDIR, check=True)
 
 words = sum(len(ptext(e).split()) for e in body.iter(q('p')))
-json.dump({'stats': stats, 'log': LOG, 'ref_changes': ref_changes, 'app_ref_changes': app_ref_changes, 'removed_empty': removed_empty,
-           'index_dropped': dropped, 'companion_blocks': [(p, l, len(e)) for p, l, e in COMP_COPIES], 'words_after': words,
-           'appmap': APPMAP, 'moved_apps': moved_apps, 'toc_entries': len(TC_LIST)},
+json.dump({'stats': stats, 'log': LOG, 'ref_changes': ref_changes, 'cap_changes': cap_changes, 'appa_changes': appa_changes,
+           'removed_empty': removed_empty, 'index_dropped': dropped, 'figures': fig_n,
+           'companion_blocks': [(p, l, len(e)) for p, l, e in COMP_COPIES], 'words_after': words, 'toc_entries': len(TC_LIST)},
           open(os.path.join(HERE, 'build_log.json'), 'w'), ensure_ascii=False, indent=1)
 print('wrote', out, '| words', words, '| skips', sum(v['skip'] for v in stats.values()), '| empty removed', removed_empty,
-      '| refs', ref_changes, '| toc', len(TC_LIST))
+      '| refs', ref_changes, '| toc', len(TC_LIST), '| figs', fig_n)
