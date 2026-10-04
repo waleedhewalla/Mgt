@@ -146,6 +146,7 @@ for f in sorted(glob.glob(os.path.join(HERE, 'edits', '*.json'))):
 
 stats = {}
 COMPANION = []          # (label, [elements])
+LASTINS = {}
 ALL_DELETES = []
 for part, data in EDITS.items():
     st = stats.setdefault(part, {'ok': 0, 'skip': 0})
@@ -179,6 +180,32 @@ for part, data in EDITS.items():
                 new = fresh(copy.deepcopy(TEMPL.get(op.get('style', 'body'), TEMPL['body'])))
                 set_text(new, op['text'])
                 el.addnext(new)
+            elif kind == 'insert_block':
+                anchor, typ = resolve(op['id'])
+                if typ != 'p':
+                    raise ValueError('bad anchor')
+                prev = LASTINS.get(id(anchor), anchor)
+                for like, txt in op['paras']:
+                    tmpl, _ = resolve(like)
+                    new = fresh(copy.deepcopy(tmpl))
+                    strip_fields(new)
+                    runs = nonempty_runs(new)
+                    if len(runs) >= 2 and is_bold(runs[0]) and not is_bold(runs[1]) and ':' in txt[:40]:
+                        k = txt.index(':') + 1
+                        set_runs(new, [(txt[:k] + ' ', runs[0]), (txt[k:].lstrip(), runs[1])])
+                    else:
+                        set_text(new, txt)
+                    prev.addnext(new)
+                    prev = new
+                LASTINS[id(anchor)] = prev
+            elif kind == 'subst':
+                hits = 0
+                for t_ in body.iter(q('t')):
+                    if t_.text and op['find'] in t_.text:
+                        t_.text = t_.text.replace(op['find'], op['replace'])
+                        hits += 1
+                if hits != 1:
+                    raise ValueError(f'subst hits {hits}')
             elif kind == 'delete':
                 for i in op.get('ids', []):
                     el, typ = resolve(i)
