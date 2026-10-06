@@ -187,24 +187,28 @@ def matrix(title, items, path):
     rows = [list(map(str, r)) for r in items]
     head, body = rows[0], rows[1:]
     nc, nr = len(head), len(body)
-    cw, ch = 2.6, 0.95
-    fig, ax = plt.subplots(figsize=(min(cw * nc * 1.05, 14), ch * (nr + 1) * 1.1 + 0.8))
-    for c in range(nc):                                    # columns laid right-to-left
-        x = -c * cw
-        ax.add_patch(FancyBboxPatch((x - cw / 2 + 0.04, -ch / 2 + 0.04), cw - 0.08, ch - 0.08, boxstyle='round,pad=0,rounding_size=0.05',
-                                    fc=RAMP[5] if c else RAMP[4], ec=SURF))
-        ax.text(x, 0, wrap(head[c], 18), ha='center', va='center', fontsize=12, color='#FFFFFF', fontweight='bold')
-    for r, row in enumerate(body, 1):
-        y = -r * ch
+    cw = 2.6
+    wraps = [[wrap(c, 18) for c in head]] + [[wrap(r[c] if c < len(r) else '', 20) for c in range(nc)] for r in body]
+    heights = [0.5 + 0.34 * max(t.count('\n') + 1 for t in row) for row in wraps]
+    total = sum(heights)
+    fig, ax = plt.subplots(figsize=(min(cw * nc * 1.05, 14), total * 1.1 + 0.8))
+    y_top = 0
+    for r, row in enumerate(wraps):
+        h = heights[r]
+        yc = y_top - h / 2
         for c in range(nc):
             x = -c * cw
-            fc = RAMP[2] if c == 0 else (RAMP[0] if r % 2 else RAMP[1])
-            ax.add_patch(FancyBboxPatch((x - cw / 2 + 0.04, y - ch / 2 + 0.04), cw - 0.08, ch - 0.08,
+            if r == 0:
+                fc, col, fw, fs = (RAMP[5] if c else RAMP[4]), '#FFFFFF', 'bold', 12
+            else:
+                fc = RAMP[2] if c == 0 else (RAMP[0] if r % 2 else RAMP[1])
+                col, fw, fs = INK, ('bold' if c == 0 else 'normal'), 11
+            ax.add_patch(FancyBboxPatch((x - cw / 2 + 0.04, y_top - h + 0.04), cw - 0.08, h - 0.08,
                                         boxstyle='round,pad=0,rounding_size=0.05', fc=fc, ec=SURF))
-            txt = row[c] if c < len(row) else ''
-            ax.text(x, y, wrap(txt, 20), ha='center', va='center', fontsize=11, color=INK, fontweight='bold' if c == 0 else 'normal')
+            ax.text(x, yc, row[c], ha='center', va='center', fontsize=fs, color=col, fontweight=fw, linespacing=1.25)
+        y_top -= h
     ax.set_xlim(-(nc - 0.5) * cw, cw / 2)
-    ax.set_ylim(-(nr + 0.5) * ch, ch / 2)
+    ax.set_ylim(y_top, 0)
     _finish(fig, ax, title, path)
 
 
